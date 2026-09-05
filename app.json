@@ -1,0 +1,38 @@
+{
+  "name": "SanjaySchoolSports",
+  "displayName": "Sanjay School Sports",
+  "expo": {
+    "name": "Sanjay School Sports",
+    "slug": "sanjay-sports",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTabletMode": true,
+      "bundleIdentifier": "com.sanjay.sportsmgmt"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.sanjay.sportsmgmt"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "c61103be-fa08-42a4-96c0-5d7c3fcc029d"
+      }
+    },
+    "owner": "sasportsplus"
+  }
+}
