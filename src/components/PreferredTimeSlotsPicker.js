@@ -16,7 +16,7 @@ export default function PreferredTimeSlotsPicker({ value = [], onChange, disable
     <View style={styles.container}>
       <Text style={styles.label}>Preferred Match Times</Text>
       <Text style={styles.helpText}>
-        Optional. Leave all unselected if this team can play at any available time.
+        Optional. Leave all unselected if this team can play at any available time, including custom times.
       </Text>
       <View style={styles.slotGrid}>
         {ALL_TIME_SLOTS.map((slot) => {

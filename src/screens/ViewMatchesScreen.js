@@ -115,11 +115,18 @@ export default function ViewMatchesScreen({ navigation }) {
     );
   };
 
-  const markMatchAsPlayed = async (matchId) => {
+  const markMatchAsPlayed = async (match) => {
     try {
-      await updateMatch(matchId, {
+      const completedAt = new Date().toISOString();
+      await updateMatch(match.id, {
         status: 'Completed',
-        playedAt: new Date().toISOString(),
+        playedAt: completedAt,
+        team1Fee: match.team1Fee ?? 5000,
+        team2Fee: match.team2Fee ?? 5000,
+        team1PaymentStatus: match.team1PaymentStatus || 'Pending',
+        team2PaymentStatus: match.team2PaymentStatus || 'Pending',
+        team1ReminderDueAt: completedAt,
+        team2ReminderDueAt: completedAt,
       });
       Alert.alert('Match updated', 'The match has been marked as played.');
     } catch (error) {
@@ -131,13 +138,13 @@ export default function ViewMatchesScreen({ navigation }) {
   const handleMarkPlayed = (match) => {
     const message = `Mark ${match.team1Name} vs ${match.team2Name} as played?`;
     if (Platform.OS === 'web') {
-      if (globalThis.confirm(message)) markMatchAsPlayed(match.id);
+      if (globalThis.confirm(message)) markMatchAsPlayed(match);
       return;
     }
 
     Alert.alert('Mark as played', message, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Mark Played', onPress: () => markMatchAsPlayed(match.id) },
+      { text: 'Mark Played', onPress: () => markMatchAsPlayed(match) },
     ]);
   };
 

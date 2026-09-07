@@ -1,12 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Modal,
+  Platform,
   SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSportsData } from '../context/SportsDataContext';
@@ -14,8 +17,14 @@ import {
   TOURNAMENT_MODES,
   WEEKDAY_TIME_SLOTS,
   WEEKEND_TIME_SLOTS,
+  ALL_TIME_SLOTS,
+  CUSTOM_DEFAULT_DAYS,
+  CUSTOM_DEFAULT_TIME_SLOTS,
+  CUSTOM_DEFAULT_DAY_TIME_SLOTS,
   createTournamentDraft,
   formatLocalDate,
+  parseLocalDate,
+  getDaysForMode,
   getPairKey,
   normalizeTime,
   validateTournamentDraft,
@@ -27,9 +36,23 @@ const MODE_DESCRIPTIONS = {
   [TOURNAMENT_MODES.WEEKDAY]: 'Monday-Friday - one match per team per day',
   [TOURNAMENT_MODES.SATURDAY]: 'Saturday only - one match per team per week',
   [TOURNAMENT_MODES.SUNDAY]: 'Sunday only - one match per team per week',
+  [TOURNAMENT_MODES.CUSTOM]: 'Choose any playing days and available match times',
 };
 
+const DAY_OPTIONS = [
+  { value: 1, label: 'Mon' }, { value: 2, label: 'Tue' },
+  { value: 3, label: 'Wed' }, { value: 4, label: 'Thu' },
+  { value: 5, label: 'Fri' }, { value: 6, label: 'Sat' },
+  { value: 0, label: 'Sun' },
+];
+
 export default function ScheduleMatchScreen({ navigation }) {
+  const { width } = useWindowDimensions();
+  const isWideLayout = width >= 900;
+  const pageScrollRef = useRef(null);
+  const draftWorkspaceY = useRef(0);
+  const draftListY = useRef(0);
+  const fixtureOffsets = useRef({});
   const { teams, matches, tournaments, scheduleMatches } = useSportsData();
   const [selectedTournamentId, setSelectedTournamentId] = useState('');
   const [tournamentName, setTournamentName] = useState('');
@@ -37,12 +60,20 @@ export default function ScheduleMatchScreen({ navigation }) {
   const [selectedTimeSlots, setSelectedTimeSlots] = useState(WEEKDAY_TIME_SLOTS);
   const [selectedTeamIds, setSelectedTeamIds] = useState([]);
   const [startDate, setStartDate] = useState(formatLocalDate(new Date()));
-  const [defaultVenue, setDefaultVenue] = useState('Main Sports Ground');
+  const [defaultVenue, setDefaultVenue] = useState('Heritage Cricket Ground');
   const [draftMatches, setDraftMatches] = useState([]);
   const [errorMessage, setErrorMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [skippedMatchCount, setSkippedMatchCount] = useState(0);
   const [teamSlotQuotas, setTeamSlotQuotas] = useState({});
+  const [customDays, setCustomDays] = useState(CUSTOM_DEFAULT_DAYS);
+  const [customDayTimeSlots, setCustomDayTimeSlots] = useState(CUSTOM_DEFAULT_DAY_TIME_SLOTS);
+  const [focusedFixtureId, setFocusedFixtureId] = useState('');
+  const [draggingFixtureId, setDraggingFixtureId] = useState('');
+  const [editingOverviewId, setEditingOverviewId] = useState('');
+  const [overviewEditDate, setOverviewEditDate] = useState('');
+  const [overviewEditTime, setOverviewEditTime] = useState('');
+  const [scheduleOverviewExpanded, setScheduleOverviewExpanded] = useState(false);
 
   const selectedTeams = useMemo(
     () => selectedTeamIds
@@ -83,33 +114,109 @@ export default function ScheduleMatchScreen({ navigation }) {
     ]));
   }, [existingPairKeys, selectedTeams]);
 
+  const scheduleGroups = useMemo(() => {
+    const groups = new Map();
+    draftMatches.forEach((fixture, index) => {
+      if (!groups.has(fixture.scheduledDate)) groups.set(fixture.scheduledDate, []);
+      groups.get(fixture.scheduledDate).push({ ...fixture, matchNumber: index + 1 });
+    });
+    return [...groups.entries()]
+      .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+      .map(([date, fixtures]) => ({
+        date,
+        fixtures: fixtures.sort((fixtureA, fixtureB) =>
+          String(normalizeTime(fixtureA.time) || fixtureA.time)
+            .localeCompare(String(normalizeTime(fixtureB.time) || fixtureB.time))
+        ),
+      }));
+  }, [draftMatches]);
+
+  const calendarGroups = useMemo(() => {
+    if (draftMatches.length === 0) return [];
+    const validFixtureDates = draftMatches
+      .map((fixture) => parseLocalDate(fixture.scheduledDate))
+      .filter(Boolean);
+    if (validFixtureDates.length === 0) return [];
+    const configuredStart = parseLocalDate(startDate);
+    const firstDate = new Date(Math.min(
+      ...(configuredStart ? [configuredStart, ...validFixtureDates] : validFixtureDates)
+        .map((date) => date.getTime())
+    ));
+    const lastDate = new Date(Math.max(...validFixtureDates.map((date) => date.getTime())));
+    const allowedDays = getDaysForMode(mode, customDays);
+    const fixtureBySlot = new Map(draftMatches.map((fixture, index) => [
+      `${fixture.scheduledDate}|${normalizeTime(fixture.time) || fixture.time}`,
+      { ...fixture, matchNumber: index + 1 },
+    ]));
+    const groups = [];
+    const cursor = new Date(firstDate);
+    for (let index = 0; cursor <= lastDate && index < 400; index += 1) {
+      const day = cursor.getDay();
+      if (allowedDays.includes(day)) {
+        const date = formatLocalDate(cursor);
+        const slots = mode === TOURNAMENT_MODES.CUSTOM
+          ? (customDayTimeSlots[day] || [])
+          : selectedTimeSlots;
+        groups.push({
+          date,
+          slots: slots.map((slot) => ({ slot, fixture: fixtureBySlot.get(`${date}|${slot}`) })),
+        });
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return groups;
+  }, [customDayTimeSlots, customDays, draftMatches, mode, selectedTimeSlots, startDate]);
+
   useEffect(() => {
-    if (![8, 10].includes(selectedTeams.length) || selectedTimeSlots.length === 0) {
+    if (selectedTeams.length < 2 || selectedTeams.length > 10 || selectedTimeSlots.length === 0) {
       setTeamSlotQuotas({});
       return;
     }
     try {
-      const baseline = createTournamentDraft({
+      const draftOptions = {
         teams: selectedTeams,
         mode,
         startDate: '2026-01-01',
         venue: 'Default',
         timeSlots: selectedTimeSlots,
         excludedPairKeys: existingPairKeys,
-      });
-      const quotas = Object.fromEntries(selectedTeams.map((team) => [
-        team.id,
-        Object.fromEntries(selectedTimeSlots.map((slot) => [slot, 0])),
-      ]));
-      baseline.forEach((fixture) => {
-        quotas[fixture.team1Id][fixture.time] += 1;
-        quotas[fixture.team2Id][fixture.time] += 1;
-      });
+        customDays,
+        customDayTimeSlots,
+      };
+      const canUseEqualQuotas = existingPairKeys.length === 0 && selectedTeams.every((team) =>
+        !team.preferredTimeSlots?.length
+        || selectedTimeSlots.every((slot) => team.preferredTimeSlots.includes(slot))
+      );
+      let quotas;
+      if (canUseEqualQuotas) {
+        const matchesPerTeam = selectedTeams.length - 1;
+        const unit = selectedTeams.length % 2 === 0 ? 1 : 2;
+        const counts = Object.fromEntries(selectedTimeSlots.map((slot) => [slot, 0]));
+        for (let assigned = 0, slotIndex = 0; assigned < matchesPerTeam; slotIndex += 1) {
+          const slot = selectedTimeSlots[slotIndex % selectedTimeSlots.length];
+          const addition = Math.min(unit, matchesPerTeam - assigned);
+          counts[slot] += addition;
+          assigned += addition;
+        }
+        quotas = Object.fromEntries(selectedTeams.map((team) => [team.id, { ...counts }]));
+        // Confirm the equal distribution is graph-feasible before showing it in the form.
+        createTournamentDraft({ ...draftOptions, slotQuotas: quotas });
+      } else {
+        const baseline = createTournamentDraft(draftOptions);
+        quotas = Object.fromEntries(selectedTeams.map((team) => [
+          team.id,
+          Object.fromEntries(selectedTimeSlots.map((slot) => [slot, 0])),
+        ]));
+        baseline.forEach((fixture) => {
+          quotas[fixture.team1Id][fixture.time] += 1;
+          quotas[fixture.team2Id][fixture.time] += 1;
+        });
+      }
       setTeamSlotQuotas(quotas);
     } catch (error) {
       setTeamSlotQuotas({});
     }
-  }, [existingPairKeys, mode, selectedTeams, selectedTimeSlots]);
+  }, [customDayTimeSlots, customDays, existingPairKeys, mode, selectedTeams, selectedTimeSlots]);
 
   const selectTournament = (tournament) => {
     setErrorMessage('');
@@ -124,8 +231,34 @@ export default function ScheduleMatchScreen({ navigation }) {
     setSelectedTimeSlots(
       selectedMode === TOURNAMENT_MODES.WEEKDAY
         ? WEEKDAY_TIME_SLOTS
-        : WEEKEND_TIME_SLOTS
+        : selectedMode === TOURNAMENT_MODES.CUSTOM
+          ? CUSTOM_DEFAULT_TIME_SLOTS
+          : WEEKEND_TIME_SLOTS
     );
+    if (selectedMode === TOURNAMENT_MODES.CUSTOM) {
+      setCustomDays(CUSTOM_DEFAULT_DAYS);
+      setCustomDayTimeSlots(CUSTOM_DEFAULT_DAY_TIME_SLOTS);
+    }
+  };
+
+  const toggleCustomDay = (day) => {
+    setErrorMessage('');
+    setCustomDays((current) => current.includes(day)
+      ? current.filter((currentDay) => currentDay !== day)
+      : [...current, day]);
+  };
+
+  const toggleCustomDayTime = (day, slot) => {
+    setErrorMessage('');
+    setCustomDayTimeSlots((current) => {
+      const daySlots = current[day] || [];
+      return {
+        ...current,
+        [day]: daySlots.includes(slot)
+          ? daySlots.filter((currentSlot) => currentSlot !== slot)
+          : [...daySlots, slot],
+      };
+    });
   };
 
   const toggleTimeSlot = (time) => {
@@ -152,20 +285,20 @@ export default function ScheduleMatchScreen({ navigation }) {
       setErrorMessage('Select a tournament pool.');
       return;
     }
-    if (![8, 10].includes(selectedTeams.length)) {
-      setErrorMessage('The tournament pool must contain exactly 8 or 10 available teams.');
+    if (selectedTeams.length < 2 || selectedTeams.length !== selectedTournament.poolSize) {
+      setErrorMessage(`The tournament pool must contain all ${selectedTournament.poolSize} teams before scheduling.`);
       return;
     }
     if (!defaultVenue.trim()) {
       setErrorMessage('Enter a default venue.');
       return;
     }
-    if (mode === TOURNAMENT_MODES.WEEKDAY && selectedTimeSlots.length === 0) {
-      setErrorMessage('Select at least one weekday time slot.');
+    if (selectedTimeSlots.length === 0) {
+      setErrorMessage('Select at least one match time.');
       return;
     }
-    if (mode !== TOURNAMENT_MODES.WEEKDAY && ![3, 5].includes(selectedTimeSlots.length)) {
-      setErrorMessage('Weekend tournaments require exactly 3 or all 5 time slots.');
+    if (mode === TOURNAMENT_MODES.CUSTOM && customDays.length === 0) {
+      setErrorMessage('Select at least one playing day.');
       return;
     }
 
@@ -178,11 +311,22 @@ export default function ScheduleMatchScreen({ navigation }) {
         timeSlots: selectedTimeSlots,
         excludedPairKeys: existingPairKeys,
         slotQuotas: teamSlotQuotas,
+        customDays,
+        customDayTimeSlots,
       });
       if (draft.length === 0) {
         setErrorMessage(`All ${selectedTeams.length * (selectedTeams.length - 1) / 2} pairings for this tournament are already recorded.`);
         return;
       }
+      const quotaAuditError = validateTournamentDraft(
+        draft,
+        mode,
+        selectedTeams,
+        teamSlotQuotas,
+        customDays,
+        customDayTimeSlots
+      );
+      if (quotaAuditError) throw new Error(quotaAuditError);
       setSkippedMatchCount(existingPairKeys.length);
       setDraftMatches(draft);
     } catch (error) {
@@ -197,12 +341,268 @@ export default function ScheduleMatchScreen({ navigation }) {
     ));
   };
 
+  const moveFixtureToSlot = (draftId, nextDate, nextTime) => {
+    const fixture = draftMatches.find((match) => match.draftId === draftId);
+    const parsedDate = parseLocalDate(nextDate);
+    const normalizedTime = normalizeTime(nextTime);
+    if (!fixture || !parsedDate || !normalizedTime) {
+      Alert.alert('Invalid date or time', 'Use YYYY-MM-DD for the date and a valid match time.');
+      return false;
+    }
+    const day = parsedDate.getDay();
+    if (!getDaysForMode(mode, customDays).includes(day)) {
+      Alert.alert('Unavailable day', 'Choose one of the tournament playing days.');
+      return false;
+    }
+    if (mode === TOURNAMENT_MODES.CUSTOM
+      && !(customDayTimeSlots[day] || []).includes(normalizedTime)) {
+      Alert.alert('Unavailable time', `${formatTimeLabel(normalizedTime)} is not available on that day.`);
+      return false;
+    }
+    const occupied = draftMatches.find((match) =>
+      match.draftId !== draftId
+      && match.scheduledDate === nextDate
+      && normalizeTime(match.time) === normalizedTime
+    );
+    if (occupied) {
+      Alert.alert('Slot already occupied', `${occupied.team1Name} vs ${occupied.team2Name} already uses this slot.`);
+      return false;
+    }
+    const teamConflict = draftMatches.find((match) =>
+      match.draftId !== draftId
+      && match.scheduledDate === nextDate
+      && [match.team1Id, match.team2Id].some((teamId) =>
+        teamId === fixture.team1Id || teamId === fixture.team2Id
+      )
+    );
+    if (teamConflict) {
+      Alert.alert('Team already scheduled', 'One of these teams already has a match on that date.');
+      return false;
+    }
+    const fixtureTeams = selectedTeams.filter((team) =>
+      team.id === fixture.team1Id || team.id === fixture.team2Id
+    );
+    const restrictedTeam = fixtureTeams.find((team) =>
+      team.preferredTimeSlots?.length && !team.preferredTimeSlots.includes(normalizedTime)
+    );
+    if (restrictedTeam) {
+      Alert.alert('Team time restriction', `${restrictedTeam.name} cannot play at ${formatTimeLabel(normalizedTime)}.`);
+      return false;
+    }
+
+    const previousTime = normalizeTime(fixture.time);
+    if (previousTime && previousTime !== normalizedTime) {
+      setTeamSlotQuotas((current) => {
+        const updated = { ...current };
+        [fixture.team1Id, fixture.team2Id].forEach((teamId) => {
+          updated[teamId] = {
+            ...updated[teamId],
+            [previousTime]: Math.max(0, Number(updated[teamId]?.[previousTime] || 0) - 1),
+            [normalizedTime]: Number(updated[teamId]?.[normalizedTime] || 0) + 1,
+          };
+        });
+        return updated;
+      });
+    }
+    setDraftMatches((current) => current.map((match) =>
+      match.draftId === draftId
+        ? { ...match, scheduledDate: nextDate, time: normalizedTime }
+        : match
+    ));
+    setFocusedFixtureId(draftId);
+    setEditingOverviewId('');
+    setErrorMessage('');
+    return true;
+  };
+
+  const beginOverviewEdit = (fixture) => {
+    setEditingOverviewId(fixture.draftId);
+    setOverviewEditDate(fixture.scheduledDate);
+    setOverviewEditTime(normalizeTime(fixture.time) || fixture.time);
+  };
+
+  const renderDraggableMatch = (fixture, content) => {
+    if (Platform.OS !== 'web') return content;
+    return React.createElement('div', {
+      key: fixture.draftId,
+      draggable: true,
+      onDragStart: (event) => {
+        event.dataTransfer.setData('text/plain', fixture.draftId);
+        event.dataTransfer.effectAllowed = 'move';
+        setDraggingFixtureId(fixture.draftId);
+      },
+      onDragEnd: () => setDraggingFixtureId(''),
+      style: { cursor: 'grab' },
+    }, content);
+  };
+
+  const renderDropSlot = (date, slot, content) => {
+    if (Platform.OS !== 'web') return content;
+    return React.createElement('div', {
+      key: `${date}|${slot}`,
+      onDragOver: (event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+      },
+      onDrop: (event) => {
+        event.preventDefault();
+        const draftId = event.dataTransfer.getData('text/plain') || draggingFixtureId;
+        if (draftId) moveFixtureToSlot(draftId, date, slot);
+        setDraggingFixtureId('');
+      },
+    }, content);
+  };
+
+  const jumpToFixture = (draftId) => {
+    setFocusedFixtureId(draftId);
+    const fixtureY = fixtureOffsets.current[draftId];
+    if (fixtureY !== undefined) {
+      pageScrollRef.current?.scrollTo({
+        y: Math.max(0, draftWorkspaceY.current + draftListY.current + fixtureY - 12),
+        animated: true,
+      });
+    }
+  };
+
+  const renderScheduleNavigator = (expanded = false) => (
+    <View style={[
+      styles.scheduleNavigator,
+      expanded
+        ? styles.scheduleNavigatorExpanded
+        : isWideLayout && styles.scheduleNavigatorWide,
+      !expanded && isWideLayout && Platform.OS === 'web' && styles.scheduleNavigatorSticky,
+    ]}>
+      <View style={styles.navigatorTitleRow}>
+        <Text style={styles.navigatorTitle}>Schedule Overview</Text>
+        <TouchableOpacity
+          style={styles.navigatorExpandButton}
+          onPress={() => setScheduleOverviewExpanded(!expanded)}
+        >
+          <Text style={styles.navigatorExpandText}>{expanded ? 'Minimize' : 'Maximize'}</Text>
+        </TouchableOpacity>
+      </View>
+      <Text style={styles.navigatorMeta}>
+        {scheduleGroups.length} dates - {draftMatches.length} matches
+      </Text>
+      <Text style={styles.navigatorHelp}>Select a match to jump to its editable card.</Text>
+      <TouchableOpacity
+        style={[styles.navigatorSaveButton, saving && styles.disabledButton]}
+        onPress={saveTournament}
+        disabled={saving}
+      >
+        <Text style={styles.navigatorSaveText}>{saving ? 'Saving...' : 'Save Schedule'}</Text>
+      </TouchableOpacity>
+      <ScrollView
+        style={[styles.navigatorGroups, expanded && styles.navigatorGroupsExpanded]}
+        contentContainerStyle={expanded && styles.navigatorGroupsExpandedContent}
+        nestedScrollEnabled
+      >
+        {calendarGroups.map((group) => {
+        const parsedDate = new Date(`${group.date}T00:00:00`);
+        const dateLabel = Number.isNaN(parsedDate.getTime())
+          ? group.date
+          : parsedDate.toLocaleDateString(undefined, {
+            weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+          });
+        return (
+          <View key={group.date} style={styles.navigatorDateGroup}>
+            <View style={styles.navigatorDateHeader}>
+              <Text style={styles.navigatorDate}>{dateLabel}</Text>
+              <Text style={styles.navigatorDateCount}>
+                {group.slots.filter(({ fixture }) => fixture).length}/{group.slots.length}
+              </Text>
+            </View>
+            {group.slots.map(({ slot, fixture }) => {
+              const slotContent = (
+                <View key={`${group.date}|${slot}`} style={[
+                  styles.calendarSlot,
+                  !fixture && styles.calendarSlotEmpty,
+                  draggingFixtureId && !fixture && styles.calendarSlotDropReady,
+                ]}>
+                  {fixture ? renderDraggableMatch(fixture, (
+                    <View style={styles.navigatorMatchWrap}>
+                      <TouchableOpacity
+                        style={[
+                          styles.navigatorMatch,
+                          focusedFixtureId === fixture.draftId && styles.navigatorMatchFocused,
+                        ]}
+                        onPress={() => jumpToFixture(fixture.draftId)}
+                      >
+                        <Text style={styles.navigatorTime}>{formatTimeLabel(slot)}</Text>
+                        <View style={styles.navigatorTeamsWrap}>
+                          <Text style={styles.navigatorTeams} numberOfLines={1}>
+                            {fixture.team1Name} vs {fixture.team2Name}
+                          </Text>
+                          <Text style={styles.navigatorMatchNumber}>Match {fixture.matchNumber} · Drag to move</Text>
+                        </View>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.navigatorEditButton} onPress={() => beginOverviewEdit(fixture)}>
+                        <Text style={styles.navigatorEditText}>Edit</Text>
+                      </TouchableOpacity>
+                      {editingOverviewId === fixture.draftId ? (
+                        <View style={styles.navigatorEditor}>
+                          <TextInput
+                            style={styles.navigatorEditorInput}
+                            value={overviewEditDate}
+                            onChangeText={setOverviewEditDate}
+                            placeholder="YYYY-MM-DD"
+                            placeholderTextColor="#91a8bc"
+                          />
+                          <TextInput
+                            style={styles.navigatorEditorInput}
+                            value={overviewEditTime}
+                            onChangeText={setOverviewEditTime}
+                            placeholder="Time"
+                            placeholderTextColor="#91a8bc"
+                          />
+                          <View style={styles.navigatorEditorActions}>
+                            <TouchableOpacity
+                              style={styles.navigatorEditorCancel}
+                              onPress={() => setEditingOverviewId('')}
+                            >
+                              <Text style={styles.navigatorEditorCancelText}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.navigatorEditorApply}
+                              onPress={() => moveFixtureToSlot(
+                                fixture.draftId,
+                                overviewEditDate,
+                                overviewEditTime
+                              )}
+                            >
+                              <Text style={styles.navigatorEditorApplyText}>Apply</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ) : null}
+                    </View>
+                  )) : (
+                    <View style={styles.emptySlotContent}>
+                      <Text style={styles.emptySlotTime}>{formatTimeLabel(slot)}</Text>
+                      <Text style={styles.emptySlotText}>
+                        {Platform.OS === 'web' ? 'Drop match here' : 'Available'}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              );
+              return renderDropSlot(group.date, slot, slotContent);
+            })}
+          </View>
+        );
+        })}
+      </ScrollView>
+    </View>
+  );
+
   const saveTournament = async () => {
     const validationError = validateTournamentDraft(
       draftMatches,
       mode,
       selectedTeams,
-      teamSlotQuotas
+      teamSlotQuotas,
+      customDays,
+      customDayTimeSlots
     );
     if (validationError) {
       setErrorMessage(validationError);
@@ -229,6 +629,10 @@ export default function ScheduleMatchScreen({ navigation }) {
           venue: fixture.venue.trim(),
           team1Score: 0,
           team2Score: 0,
+          team1Fee: 5000,
+          team2Fee: 5000,
+          team1PaymentStatus: 'Pending',
+          team2PaymentStatus: 'Pending',
         };
       });
 
@@ -245,10 +649,10 @@ export default function ScheduleMatchScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView ref={pageScrollRef} contentContainerStyle={styles.scrollContent}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Tournament Scheduler</Text>
-          <Text style={styles.headerSubtitle}>Saved 8-team and 10-team round-robin pools</Text>
+          <Text style={styles.headerSubtitle}>Flexible round-robin pools for 2 to 10 teams</Text>
         </View>
 
         {errorMessage ? <Text style={styles.errorMessage}>{errorMessage}</Text> : null}
@@ -301,19 +705,59 @@ export default function ScheduleMatchScreen({ navigation }) {
                 ))}
               </View>
               <Text style={styles.helpText}>{MODE_DESCRIPTIONS[mode]}</Text>
+              {mode === TOURNAMENT_MODES.CUSTOM ? (
+                <>
+                  <View style={styles.dayGrid}>
+                    {DAY_OPTIONS.map((day) => {
+                      const selected = customDays.includes(day.value);
+                      return (
+                        <TouchableOpacity
+                          key={day.value}
+                          style={[styles.dayButton, selected && styles.dayButtonSelected]}
+                          onPress={() => toggleCustomDay(day.value)}
+                        >
+                          <Text style={[styles.dayText, selected && styles.dayTextSelected]}>{day.label}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  <Text style={[styles.label, styles.customAvailabilityLabel]}>Times available on each day</Text>
+                  {DAY_OPTIONS.filter((day) => customDays.includes(day.value)).map((day) => (
+                    <View key={day.value} style={styles.dayAvailabilityRow}>
+                      <Text style={styles.dayAvailabilityName}>{day.label}</Text>
+                      <View style={styles.dayAvailabilitySlots}>
+                        {selectedTimeSlots.map((slot) => {
+                          const selected = (customDayTimeSlots[day.value] || []).includes(slot);
+                          return (
+                            <TouchableOpacity
+                              key={slot}
+                              style={[styles.dayTimeButton, selected && styles.dayTimeButtonSelected]}
+                              onPress={() => toggleCustomDayTime(day.value, slot)}
+                            >
+                              <Text style={[styles.dayTimeText, selected && styles.dayTimeTextSelected]}>
+                                {formatTimeLabel(slot)}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ))}
+                </>
+              ) : null}
             </View>
 
             <View style={styles.section}>
               <Text style={styles.label}>Available match times</Text>
               <Text style={styles.helpText}>
-                {mode === TOURNAMENT_MODES.WEEKDAY
-                  ? 'Choose the morning slot, night slot, or both.'
-                  : 'Choose exactly 3 slots or select all 5 slots.'}
+                Choose one or more times. Custom mode includes the 5:00 PM option.
               </Text>
               <View style={styles.slotGrid}>
                 {(mode === TOURNAMENT_MODES.WEEKDAY
                   ? WEEKDAY_TIME_SLOTS
-                  : WEEKEND_TIME_SLOTS
+                  : mode === TOURNAMENT_MODES.CUSTOM
+                    ? ALL_TIME_SLOTS
+                    : WEEKEND_TIME_SLOTS
                 ).map((time) => {
                   const selected = selectedTimeSlots.includes(time);
                   return (
@@ -439,20 +883,37 @@ export default function ScheduleMatchScreen({ navigation }) {
             </TouchableOpacity>
           </>
         ) : (
-          <>
-            <View style={styles.summaryCard}>
-              <Text style={styles.summaryTitle}>{tournamentName}</Text>
-              <Text style={styles.summaryText}>
-                {mode} tournament - {draftMatches.length} matches remaining
-                {skippedMatchCount ? ` - ${skippedMatchCount} existing matches skipped` : ''}
-              </Text>
-              <Text style={styles.summaryText}>
-                Edit dates, times, or venues below. Times may use 9:00, 09:00, or 9:00 AM format.
-              </Text>
-            </View>
+          <View
+            style={[styles.draftWorkspace, isWideLayout && styles.draftWorkspaceWide]}
+            onLayout={(event) => { draftWorkspaceY.current = event.nativeEvent.layout.y; }}
+          >
+            {!isWideLayout ? renderScheduleNavigator() : null}
+            <View
+              style={[styles.draftList, isWideLayout && styles.draftListWide]}
+              onLayout={(event) => { draftListY.current = event.nativeEvent.layout.y; }}
+            >
+              <View style={styles.summaryCard}>
+                <Text style={styles.summaryTitle}>{tournamentName}</Text>
+                <Text style={styles.summaryText}>
+                  {mode} tournament - {draftMatches.length} matches remaining
+                  {skippedMatchCount ? ` - ${skippedMatchCount} existing matches skipped` : ''}
+                </Text>
+                <Text style={styles.summaryText}>
+                  Edit dates, times, or venues below. Use the schedule overview to jump to any match.
+                </Text>
+              </View>
 
-            {draftMatches.map((fixture, index) => (
-              <View key={fixture.draftId} style={styles.fixtureCard}>
+              {draftMatches.map((fixture, index) => (
+              <View
+                key={fixture.draftId}
+                style={[
+                  styles.fixtureCard,
+                  focusedFixtureId === fixture.draftId && styles.fixtureCardFocused,
+                ]}
+                onLayout={(event) => {
+                  fixtureOffsets.current[fixture.draftId] = event.nativeEvent.layout.y;
+                }}
+              >
                 <View style={styles.fixtureHeader}>
                   <Text style={styles.roundText}>Round {fixture.round}</Text>
                   <Text style={styles.matchNumber}>Match {index + 1}</Text>
@@ -483,9 +944,9 @@ export default function ScheduleMatchScreen({ navigation }) {
                   onChangeText={(value) => updateDraftMatch(fixture.draftId, 'venue', value)}
                 />
               </View>
-            ))}
+              ))}
 
-            <View style={styles.actionRow}>
+              <View style={styles.actionRow}>
               <TouchableOpacity
                 style={styles.cancelButton}
                 onPress={() => { setDraftMatches([]); setErrorMessage(''); }}
@@ -502,10 +963,21 @@ export default function ScheduleMatchScreen({ navigation }) {
                   {saving ? 'Saving...' : `Save ${draftMatches.length} matches`}
                 </Text>
               </TouchableOpacity>
+              </View>
             </View>
-          </>
+            {isWideLayout ? renderScheduleNavigator() : null}
+          </View>
         )}
       </ScrollView>
+      <Modal
+        visible={scheduleOverviewExpanded}
+        animationType="slide"
+        onRequestClose={() => setScheduleOverviewExpanded(false)}
+      >
+        <SafeAreaView style={styles.expandedOverviewScreen}>
+          {renderScheduleNavigator(true)}
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -534,6 +1006,19 @@ const styles = StyleSheet.create({
   modeButtonSelected: { backgroundColor: '#007AFF' },
   modeText: { color: '#555', fontSize: 12, fontWeight: '700' },
   modeTextSelected: { color: '#fff' },
+  dayGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 12 },
+  dayButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, backgroundColor: '#eef1f5' },
+  dayButtonSelected: { backgroundColor: '#163a63' },
+  dayText: { color: '#555', fontSize: 11, fontWeight: '700' },
+  dayTextSelected: { color: '#fff' },
+  customAvailabilityLabel: { marginTop: 16 },
+  dayAvailabilityRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
+  dayAvailabilityName: { width: 42, color: '#333', fontSize: 12, fontWeight: '700' },
+  dayAvailabilitySlots: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  dayTimeButton: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 14, backgroundColor: '#eef1f5' },
+  dayTimeButtonSelected: { backgroundColor: '#00a65a' },
+  dayTimeText: { color: '#555', fontSize: 10, fontWeight: '700' },
+  dayTimeTextSelected: { color: '#fff' },
   counter: { color: '#007AFF', fontWeight: '700' },
   teamGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   slotGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
@@ -563,6 +1048,53 @@ const styles = StyleSheet.create({
   summaryTitle: { fontSize: 19, fontWeight: 'bold', color: '#163a63' },
   summaryText: { color: '#476681', fontSize: 12, marginTop: 5, lineHeight: 17 },
   fixtureCard: { marginHorizontal: 15, marginTop: 10, padding: 14, borderRadius: 10, backgroundColor: '#fff', borderLeftWidth: 4, borderLeftColor: '#007AFF' },
+  fixtureCardFocused: { borderColor: '#ff9500', borderWidth: 2, borderLeftWidth: 5, backgroundColor: '#fffaf2' },
+  draftWorkspace: { width: '100%' },
+  draftWorkspaceWide: { flexDirection: 'row', alignItems: 'flex-start', paddingRight: 15 },
+  draftList: { width: '100%' },
+  draftListWide: { width: '66%' },
+  scheduleNavigator: { margin: 15, padding: 14, borderRadius: 12, backgroundColor: '#163a63', maxHeight: 520 },
+  scheduleNavigatorWide: { width: '34%', marginLeft: 10, marginRight: 0, alignSelf: 'flex-start' },
+  scheduleNavigatorSticky: { position: 'sticky', top: 12 },
+  expandedOverviewScreen: { flex: 1, backgroundColor: '#0f2d49' },
+  scheduleNavigatorExpanded: { flex: 1, maxHeight: '100%', margin: 0, borderRadius: 0, padding: 18 },
+  navigatorTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  navigatorTitle: { color: '#fff', fontSize: 18, fontWeight: '800' },
+  navigatorExpandButton: { borderWidth: 1, borderColor: '#8ed0ff', paddingHorizontal: 11, paddingVertical: 6, borderRadius: 7 },
+  navigatorExpandText: { color: '#bfe2ff', fontSize: 10, fontWeight: '800' },
+  navigatorMeta: { color: '#bcd8f0', fontSize: 12, fontWeight: '700', marginTop: 4 },
+  navigatorHelp: { color: '#d8e8f5', fontSize: 11, marginTop: 5, marginBottom: 10 },
+  navigatorSaveButton: { backgroundColor: '#00a65a', paddingVertical: 10, alignItems: 'center', borderRadius: 8, marginBottom: 10 },
+  navigatorSaveText: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  navigatorGroups: { flexGrow: 0 },
+  navigatorGroupsExpanded: { flex: 1 },
+  navigatorGroupsExpandedContent: { paddingBottom: 24 },
+  navigatorDateGroup: { marginBottom: 12 },
+  navigatorDateHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  navigatorDate: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  navigatorDateCount: { color: '#163a63', backgroundColor: '#dcecff', minWidth: 22, textAlign: 'center', borderRadius: 11, paddingVertical: 2, fontSize: 10, fontWeight: '800' },
+  calendarSlot: { borderRadius: 8, marginBottom: 6 },
+  calendarSlotEmpty: { borderWidth: 1, borderStyle: 'dashed', borderColor: '#6685a3', backgroundColor: '#1d456a' },
+  calendarSlotDropReady: { borderColor: '#65d99b', backgroundColor: '#1d6046' },
+  navigatorMatchWrap: { backgroundColor: '#244d75', borderRadius: 8, overflow: 'hidden' },
+  navigatorMatch: { flexDirection: 'row', alignItems: 'center', padding: 9, borderWidth: 1, borderColor: 'transparent' },
+  navigatorMatchFocused: { backgroundColor: '#815315', borderColor: '#ffbd59' },
+  navigatorTime: { color: '#8ed0ff', width: 68, fontSize: 11, fontWeight: '800' },
+  navigatorTeamsWrap: { flex: 1 },
+  navigatorTeams: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  navigatorMatchNumber: { color: '#bcd8f0', fontSize: 9, marginTop: 2 },
+  navigatorEditButton: { alignSelf: 'flex-end', paddingHorizontal: 10, paddingVertical: 5, marginRight: 4, marginBottom: 4, backgroundColor: '#173b5e', borderRadius: 5 },
+  navigatorEditText: { color: '#bfe2ff', fontSize: 10, fontWeight: '800' },
+  navigatorEditor: { padding: 8, paddingTop: 3, gap: 6 },
+  navigatorEditorInput: { backgroundColor: '#173b5e', borderWidth: 1, borderColor: '#52789a', borderRadius: 6, padding: 7, color: '#fff', fontSize: 11 },
+  navigatorEditorActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 6 },
+  navigatorEditorCancel: { paddingHorizontal: 10, paddingVertical: 6 },
+  navigatorEditorCancelText: { color: '#c6d8e7', fontSize: 10, fontWeight: '700' },
+  navigatorEditorApply: { backgroundColor: '#00a65a', borderRadius: 5, paddingHorizontal: 12, paddingVertical: 6 },
+  navigatorEditorApplyText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+  emptySlotContent: { flexDirection: 'row', alignItems: 'center', padding: 9 },
+  emptySlotTime: { color: '#8ed0ff', width: 68, fontSize: 11, fontWeight: '800' },
+  emptySlotText: { color: '#9bb5cb', fontSize: 10, fontStyle: 'italic' },
   fixtureHeader: { flexDirection: 'row', justifyContent: 'space-between' },
   roundText: { color: '#007AFF', fontSize: 12, fontWeight: '700' },
   matchNumber: { color: '#999', fontSize: 11 },

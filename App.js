@@ -3,7 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 // Screens
 import LoginScreen from './src/screens/LoginScreen';
@@ -15,12 +15,31 @@ import ViewMatchesScreen from './src/screens/ViewMatchesScreen';
 import EditTeamScreen from './src/screens/EditTeamScreen';
 import TournamentPoolsScreen from './src/screens/TournamentPoolsScreen';
 import EditMatchScreen from './src/screens/EditMatchScreen';
+import PaymentsScreen from './src/screens/PaymentsScreen';
+import InvoiceScreen from './src/screens/InvoiceScreen';
 
 // Context
 import { SportsDataProvider } from './src/context/SportsDataContext';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
+
+const HeaderSectionTabs = ({ navigation, active }) => (
+  <View style={styles.headerTabs}>
+    <TouchableOpacity
+      style={[styles.headerTab, active === 'schedule' && styles.headerTabActive]}
+      onPress={() => navigation.getParent()?.navigate('MatchManagement', { screen: 'ScheduleMatch' })}
+    >
+      <Text style={[styles.headerTabText, active === 'schedule' && styles.headerTabTextActive]}>Schedule</Text>
+    </TouchableOpacity>
+    <TouchableOpacity
+      style={[styles.headerTab, active === 'payment' && styles.headerTabActive]}
+      onPress={() => navigation.getParent()?.navigate('PaymentManagement', { screen: 'Payments' })}
+    >
+      <Text style={[styles.headerTabText, active === 'payment' && styles.headerTabTextActive]}>Payment</Text>
+    </TouchableOpacity>
+  </View>
+);
 
 const AdminTabNavigator = ({ onLogout }) => {
   return (
@@ -57,6 +76,11 @@ const AdminTabNavigator = ({ onLogout }) => {
           title: 'Matches',
           tabBarLabel: 'Matches',
         }}
+      />
+      <Tab.Screen
+        name="PaymentManagement"
+        component={PaymentManagementStack}
+        options={{ title: 'Payments', tabBarLabel: 'Payments' }}
       />
     </Tab.Navigator>
   );
@@ -102,7 +126,7 @@ const TeamManagementStack = () => {
 const MatchManagementStack = () => {
   return (
     <Stack.Navigator
-      screenOptions={{
+      screenOptions={({ navigation }) => ({
         headerStyle: {
           backgroundColor: '#f8f8f8',
         },
@@ -110,7 +134,8 @@ const MatchManagementStack = () => {
         headerTitleStyle: {
           fontWeight: 'bold',
         },
-      }}
+        headerRight: () => <HeaderSectionTabs navigation={navigation} active="schedule" />,
+      })}
     >
       <Stack.Screen
         name="ViewMatches"
@@ -130,6 +155,20 @@ const MatchManagementStack = () => {
     </Stack.Navigator>
   );
 };
+
+const PaymentManagementStack = () => (
+  <Stack.Navigator
+    screenOptions={({ navigation }) => ({
+      headerStyle: { backgroundColor: '#f8f8f8' },
+      headerTintColor: '#000',
+      headerTitleStyle: { fontWeight: 'bold' },
+      headerRight: () => <HeaderSectionTabs navigation={navigation} active="payment" />,
+    })}
+  >
+    <Stack.Screen name="Payments" component={PaymentsScreen} options={{ title: 'Payments' }} />
+    <Stack.Screen name="Invoice" component={InvoiceScreen} options={{ title: 'Invoice' }} />
+  </Stack.Navigator>
+);
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -192,3 +231,11 @@ export default function App() {
     </SportsDataProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  headerTabs: { flexDirection: 'row', gap: 5, marginRight: 10 },
+  headerTab: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 7 },
+  headerTabActive: { backgroundColor: '#5b2be0' },
+  headerTabText: { color: '#555', fontSize: 11, fontWeight: '700' },
+  headerTabTextActive: { color: '#fff' },
+});

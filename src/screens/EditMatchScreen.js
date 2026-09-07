@@ -23,6 +23,8 @@ export default function EditMatchScreen({ navigation, route }) {
   const [status, setStatus] = useState('Scheduled');
   const [venue, setVenue] = useState('');
   const [loading, setLoading] = useState(false);
+  const [team1Fee, setTeam1Fee] = useState('5000');
+  const [team2Fee, setTeam2Fee] = useState('5000');
 
   useEffect(() => {
     const currentMatch = getMatchById(matchId);
@@ -32,6 +34,8 @@ export default function EditMatchScreen({ navigation, route }) {
       setTeam2Score(currentMatch.team2Score?.toString() || '0');
       setStatus(currentMatch.status || 'Scheduled');
       setVenue(currentMatch.venue || '');
+      setTeam1Fee(String(currentMatch.team1Fee ?? 5000));
+      setTeam2Fee(String(currentMatch.team2Fee ?? 5000));
     }
   }, [matchId, getMatchById]);
 
@@ -58,6 +62,12 @@ export default function EditMatchScreen({ navigation, route }) {
       Alert.alert('Error', 'Please enter valid scores');
       return;
     }
+    const fee1 = Number(team1Fee);
+    const fee2 = Number(team2Fee);
+    if (!Number.isFinite(fee1) || fee1 < 0 || !Number.isFinite(fee2) || fee2 < 0) {
+      Alert.alert('Error', 'Please enter valid match fees for both teams');
+      return;
+    }
 
     setLoading(true);
 
@@ -67,6 +77,14 @@ export default function EditMatchScreen({ navigation, route }) {
         team2Score: score2,
         status: status,
         venue: venue.trim(),
+        team1Fee: fee1,
+        team2Fee: fee2,
+        team1PaymentStatus: match.team1PaymentStatus || 'Pending',
+        team2PaymentStatus: match.team2PaymentStatus || 'Pending',
+        ...(status === 'Completed' ? {
+          team1ReminderDueAt: match.team1ReminderSentAt ? match.team1ReminderDueAt : new Date().toISOString(),
+          team2ReminderDueAt: match.team2ReminderSentAt ? match.team2ReminderDueAt : new Date().toISOString(),
+        } : {}),
       });
 
       navigation.goBack();
@@ -127,6 +145,36 @@ export default function EditMatchScreen({ navigation, route }) {
               onChangeText={setVenue}
               editable={!loading}
             />
+          </View>
+
+          {/* Status */}
+          <View style={styles.section}>
+            <Text style={styles.label}>Match Fees</Text>
+            <Text style={styles.feeHelp}>Set a separate fee for each team for this match.</Text>
+            <View style={styles.scoresContainer}>
+              <View style={styles.scoreInputGroup}>
+                <Text style={styles.teamLabel}>{match.team1Name}</Text>
+                <TextInput
+                  style={styles.input}
+                  value={team1Fee}
+                  onChangeText={setTeam1Fee}
+                  keyboardType="number-pad"
+                  placeholder="5000"
+                  editable={!loading}
+                />
+              </View>
+              <View style={styles.scoreInputGroup}>
+                <Text style={styles.teamLabel}>{match.team2Name}</Text>
+                <TextInput
+                  style={styles.input}
+                  value={team2Fee}
+                  onChangeText={setTeam2Fee}
+                  keyboardType="number-pad"
+                  placeholder="5000"
+                  editable={!loading}
+                />
+              </View>
+            </View>
           </View>
 
           {/* Status */}
@@ -354,6 +402,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     overflow: 'hidden',
   },
+  feeHelp: { color: '#777', fontSize: 12, marginBottom: 12 },
   statusOptions: {
     flexDirection: 'row',
     gap: 8,

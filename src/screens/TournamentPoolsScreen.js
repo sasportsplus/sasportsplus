@@ -57,6 +57,10 @@ export default function TournamentPoolsScreen({ navigation }) {
   };
 
   const savePool = async () => {
+    if (!Number.isInteger(poolSize) || poolSize < 2 || poolSize > 10) {
+      setErrorMessage('Pool size must be between 2 and 10 teams.');
+      return;
+    }
     if (!name.trim()) {
       setErrorMessage('Enter a tournament name.');
       return;
@@ -152,7 +156,7 @@ export default function TournamentPoolsScreen({ navigation }) {
             />
             <Text style={styles.label}>Pool size</Text>
             <View style={styles.sizeRow}>
-              {[8, 10].map((size) => (
+              {[6, 8, 9, 10].map((size) => (
                 <TouchableOpacity
                   key={size}
                   style={[styles.sizeButton, poolSize === size && styles.sizeButtonActive]}
@@ -162,6 +166,14 @@ export default function TournamentPoolsScreen({ navigation }) {
                 </TouchableOpacity>
               ))}
             </View>
+            <TextInput
+              style={[styles.input, styles.poolSizeInput]}
+              value={String(poolSize)}
+              onChangeText={(value) => selectPoolSize(Number.parseInt(value, 10) || 0)}
+              keyboardType="number-pad"
+              placeholder="Custom size (2-10)"
+              placeholderTextColor="#999"
+            />
             <View style={styles.selectionHeader}>
               <Text style={styles.label}>Select teams</Text>
               <Text style={styles.count}>{selectedTeamIds.length}/{poolSize}</Text>
@@ -252,7 +264,7 @@ export default function TournamentPoolsScreen({ navigation }) {
         {!showForm && tournaments.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyTitle}>No tournament pools yet</Text>
-            <Text style={styles.emptyText}>Create an 8-team or 10-team pool to begin scheduling.</Text>
+            <Text style={styles.emptyText}>Create a pool with 2 to 10 teams to begin scheduling.</Text>
           </View>
         ) : null}
       </ScrollView>
@@ -274,6 +286,7 @@ const styles = StyleSheet.create({
   poolWarning: { backgroundColor: '#fff5d9', color: '#8a5a00', padding: 10, borderRadius: 7, marginBottom: 10, fontSize: 12 },
   label: { color: '#444', fontSize: 13, fontWeight: '700', marginBottom: 8, marginTop: 10 },
   input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 11, color: '#222' },
+  poolSizeInput: { marginTop: 10 },
   sizeRow: { flexDirection: 'row', gap: 10 },
   sizeButton: { flex: 1, padding: 11, alignItems: 'center', backgroundColor: '#eef1f5', borderRadius: 8 },
   sizeButtonActive: { backgroundColor: '#007AFF' },

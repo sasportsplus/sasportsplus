@@ -2,11 +2,19 @@ export const TOURNAMENT_MODES = {
   WEEKDAY: 'Weekday',
   SATURDAY: 'Saturday',
   SUNDAY: 'Sunday',
+  CUSTOM: 'Custom',
 };
 
 export const WEEKDAY_TIME_SLOTS = ['06:00', '20:00'];
 export const WEEKEND_TIME_SLOTS = ['06:00', '10:00', '13:30', '16:30', '20:00'];
-export const ALL_TIME_SLOTS = WEEKEND_TIME_SLOTS;
+export const ALL_TIME_SLOTS = ['06:00', '10:00', '13:30', '16:30', '17:00', '20:00'];
+export const CUSTOM_DEFAULT_DAYS = [5, 6, 0];
+export const CUSTOM_DEFAULT_TIME_SLOTS = ['17:00', '20:00'];
+export const CUSTOM_DEFAULT_DAY_TIME_SLOTS = {
+  5: ['20:00'],
+  6: ['17:00', '20:00'],
+  0: ['17:00', '20:00'],
+};
 
 const pad = (value) => String(value).padStart(2, '0');
 
@@ -48,41 +56,43 @@ export const normalizeTime = (timeValue) => {
   return `${pad(hour)}:${minute}`;
 };
 
-const moveToAllowedStartDate = (startDate, mode) => {
+export const getDaysForMode = (mode, customDays = []) => {
+  if (mode === TOURNAMENT_MODES.SATURDAY) return [6];
+  if (mode === TOURNAMENT_MODES.SUNDAY) return [0];
+  if (mode === TOURNAMENT_MODES.CUSTOM) return customDays;
+  return [1, 2, 3, 4, 5];
+};
+
+const moveToAllowedStartDate = (startDate, mode, customDays = []) => {
   const date = new Date(startDate);
   date.setHours(0, 0, 0, 0);
-
-  if (mode === TOURNAMENT_MODES.SATURDAY) {
-    date.setDate(date.getDate() + ((6 - date.getDay() + 7) % 7));
-  } else if (mode === TOURNAMENT_MODES.SUNDAY) {
-    date.setDate(date.getDate() + ((7 - date.getDay()) % 7));
-  } else {
-    while (date.getDay() === 0 || date.getDay() === 6) {
-      date.setDate(date.getDate() + 1);
-    }
-  }
+  const allowedDays = getDaysForMode(mode, customDays);
+  if (allowedDays.length === 0) throw new Error('Select at least one playing day.');
+  while (!allowedDays.includes(date.getDay())) date.setDate(date.getDate() + 1);
 
   return date;
 };
 
-const getNextRoundDate = (date, mode) => {
+const getNextRoundDate = (date, mode, customDays = []) => {
   const next = new Date(date);
-  if (mode === TOURNAMENT_MODES.WEEKDAY) {
+  const allowedDays = getDaysForMode(mode, customDays);
+  if (mode === TOURNAMENT_MODES.SATURDAY || mode === TOURNAMENT_MODES.SUNDAY) {
+    next.setDate(next.getDate() + 7);
+  } else {
     do {
       next.setDate(next.getDate() + 1);
-    } while (next.getDay() === 0 || next.getDay() === 6);
-  } else {
-    next.setDate(next.getDate() + 7);
+    } while (!allowedDays.includes(next.getDay()));
   }
   return next;
 };
 
 export const generateRoundRobinRounds = (teams) => {
-  if (![8, 10].includes(teams.length)) {
-    throw new Error('Exactly 8 or 10 teams are required');
+  if (teams.length < 2 || teams.length > 10) {
+    throw new Error('A tournament requires between 2 and 10 teams');
   }
 
   const rotatingTeams = [...teams];
+  if (rotatingTeams.length % 2 !== 0) rotatingTeams.push(null);
   const rounds = [];
   const teamCount = rotatingTeams.length;
   const matchesPerRound = teamCount / 2;
@@ -90,10 +100,9 @@ export const generateRoundRobinRounds = (teams) => {
   for (let roundIndex = 0; roundIndex < teamCount - 1; roundIndex += 1) {
     const fixtures = [];
     for (let index = 0; index < matchesPerRound; index += 1) {
-      fixtures.push({
-        team1: rotatingTeams[index],
-        team2: rotatingTeams[teamCount - 1 - index],
-      });
+      const team1 = rotatingTeams[index];
+      const team2 = rotatingTeams[teamCount - 1 - index];
+      if (team1 && team2) fixtures.push({ team1, team2 });
     }
     rounds.push(fixtures);
     rotatingTeams.splice(1, 0, rotatingTeams.pop());
@@ -176,8 +185,8 @@ const assignQuotaSlots = (fixtures, teams, selectedTimeSlots, slotQuotas) => {
     }
     choices.sort((slotA, slotB) => {
       const fixture = fixtures[chosenIndex];
-      return (remaining[fixture.team1Id][slotA] + remaining[fixture.team2Id][slotA])
-        - (remaining[fixture.team1Id][slotB] + remaining[fixture.team2Id][slotB]);
+      return (remaining[fixture.team1Id][slotB] + remaining[fixture.team2Id][slotB])
+        - (remaining[fixture.team1Id][slotA] + remaining[fixture.team2Id][slotA]);
     });
 
     const fixture = fixtures[chosenIndex];
@@ -201,6 +210,57 @@ const assignQuotaSlots = (fixtures, teams, selectedTimeSlots, slotQuotas) => {
   return assignments;
 };
 
+const assignFixtureDates = ({
+  fixtures,
+  parsedStartDate,
+  mode,
+  customDays,
+  selectedTimeSlots,
+  customDayTimeSlots,
+}) => {
+  const allowedDays = getDaysForMode(mode, customDays);
+  const slotsForDay = (day) => mode === TOURNAMENT_MODES.CUSTOM
+    ? (customDayTimeSlots?.[day] || selectedTimeSlots)
+    : selectedTimeSlots;
+
+  if (mode === TOURNAMENT_MODES.CUSTOM) {
+    for (const day of allowedDays) {
+      if (slotsForDay(day).length === 0) {
+        throw new Error('Every selected playing day requires at least one match time.');
+      }
+    }
+    for (const slot of selectedTimeSlots) {
+      if (!allowedDays.some((day) => slotsForDay(day).includes(slot))) {
+        throw new Error(`${formatTimeLabel(slot)} is not available on any selected playing day.`);
+      }
+    }
+  }
+
+  const dateUsage = new Map();
+  const firstDate = moveToAllowedStartDate(parsedStartDate, mode, customDays);
+  return fixtures.map((fixture) => {
+    const candidate = new Date(firstDate);
+    for (let attempt = 0; attempt < 3660; attempt += 1) {
+      const day = candidate.getDay();
+      if (allowedDays.includes(day) && slotsForDay(day).includes(fixture.time)) {
+        const dateKey = formatLocalDate(candidate);
+        const usage = dateUsage.get(dateKey) || { slots: new Set(), teams: new Set() };
+        if (!usage.slots.has(fixture.time)
+          && !usage.teams.has(fixture.team1Id)
+          && !usage.teams.has(fixture.team2Id)) {
+          usage.slots.add(fixture.time);
+          usage.teams.add(fixture.team1Id);
+          usage.teams.add(fixture.team2Id);
+          dateUsage.set(dateKey, usage);
+          return { ...fixture, scheduledDate: dateKey };
+        }
+      }
+      candidate.setDate(candidate.getDate() + 1);
+    }
+    throw new Error('Unable to place every match within the selected day and time availability.');
+  });
+};
+
 export const createTournamentDraft = ({
   teams,
   mode,
@@ -209,6 +269,8 @@ export const createTournamentDraft = ({
   timeSlots,
   excludedPairKeys = [],
   slotQuotas,
+  customDays = [],
+  customDayTimeSlots,
 }) => {
   const parsedStartDate = parseLocalDate(startDate);
   if (!parsedStartDate) throw new Error('Start date must use YYYY-MM-DD format');
@@ -220,7 +282,10 @@ export const createTournamentDraft = ({
       ? WEEKDAY_TIME_SLOTS
       : WEEKEND_TIME_SLOTS;
   const excludedPairs = new Set(excludedPairKeys);
-  let roundDate = moveToAllowedStartDate(parsedStartDate, mode);
+  const effectiveCustomDayTimeSlots = mode === TOURNAMENT_MODES.CUSTOM
+    ? (customDayTimeSlots || CUSTOM_DEFAULT_DAY_TIME_SLOTS)
+    : null;
+  let roundDate = moveToAllowedStartDate(parsedStartDate, mode, customDays);
 
   const getAllowedFixtureSlots = (team1, team2) => {
     const team1Slots = team1.preferredTimeSlots?.length
@@ -259,18 +324,33 @@ export const createTournamentDraft = ({
           venue,
         };
       });
-    roundDate = getNextRoundDate(roundDate, mode);
+    roundDate = getNextRoundDate(roundDate, mode, customDays);
     return roundMatches;
   });
 
+  let scheduledDraft = draft;
   if (slotQuotas) {
     const assignments = assignQuotaSlots(draft, teams, selectedTimeSlots, slotQuotas);
-    return draft.map((fixture, index) => ({ ...fixture, time: assignments[index] }));
+    scheduledDraft = draft.map((fixture, index) => ({ ...fixture, time: assignments[index] }));
   }
-  return draft;
+  return assignFixtureDates({
+    fixtures: scheduledDraft,
+    parsedStartDate,
+    mode,
+    customDays,
+    selectedTimeSlots,
+    customDayTimeSlots: effectiveCustomDayTimeSlots,
+  });
 };
 
-export const validateTournamentDraft = (fixtures, mode, teams = [], slotQuotas = null) => {
+export const validateTournamentDraft = (
+  fixtures,
+  mode,
+  teams = [],
+  slotQuotas = null,
+  customDays = [],
+  customDayTimeSlots = null
+) => {
   if (fixtures.length === 0) return 'There are no remaining matches to schedule.';
   if (fixtures.length > 45) return 'A tournament cannot contain more than 45 matches.';
 
@@ -278,6 +358,10 @@ export const validateTournamentDraft = (fixtures, mode, teams = [], slotQuotas =
   const pairings = new Set();
   const teamsById = new Map(teams.map((team) => [team.id, team]));
   const actualSlotCounts = {};
+  const occupiedDateSlots = new Set();
+  const effectiveCustomDayTimeSlots = mode === TOURNAMENT_MODES.CUSTOM
+    ? (customDayTimeSlots || CUSTOM_DEFAULT_DAY_TIME_SLOTS)
+    : null;
 
   for (const fixture of fixtures) {
     const pairKey = getPairKey(fixture.team1Id, fixture.team2Id);
@@ -302,15 +386,18 @@ export const validateTournamentDraft = (fixtures, mode, teams = [], slotQuotas =
     if (!fixture.venue.trim()) return 'Every match requires a venue.';
 
     const day = date.getDay();
-    if (mode === TOURNAMENT_MODES.WEEKDAY && (day === 0 || day === 6)) {
-      return 'Weekday tournament matches must be Monday through Friday.';
+    if (!getDaysForMode(mode, customDays).includes(day)) {
+      return 'A match date falls outside the selected playing days.';
     }
-    if (mode === TOURNAMENT_MODES.SATURDAY && day !== 6) {
-      return 'Saturday tournament matches must be played on Saturday.';
+    if (mode === TOURNAMENT_MODES.CUSTOM
+      && !(effectiveCustomDayTimeSlots[day] || []).includes(normalizedTime)) {
+      return `${formatTimeLabel(normalizedTime)} is not available on that playing day.`;
     }
-    if (mode === TOURNAMENT_MODES.SUNDAY && day !== 0) {
-      return 'Sunday tournament matches must be played on Sunday.';
+    const dateSlotKey = `${fixture.scheduledDate}|${normalizedTime}`;
+    if (occupiedDateSlots.has(dateSlotKey)) {
+      return `Only one match can use ${formatTimeLabel(normalizedTime)} on ${fixture.scheduledDate}.`;
     }
+    occupiedDateSlots.add(dateSlotKey);
 
     for (const teamId of [fixture.team1Id, fixture.team2Id]) {
       const teamDateKey = `${teamId}|${fixture.scheduledDate}`;

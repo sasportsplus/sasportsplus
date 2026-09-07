@@ -23,6 +23,7 @@ export default function AddTeamScreen({ navigation }) {
   const [description, setDescription] = useState('');
   const [logo, setLogo] = useState('');
   const [preferredTimeSlots, setPreferredTimeSlots] = useState([]);
+  const [whatsappNumber, setWhatsappNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -39,6 +40,7 @@ export default function AddTeamScreen({ navigation }) {
         description: '',
         logo: '',
         preferredTimeSlots: [],
+        whatsappNumber: '',
       })));
       navigation.goBack();
       Alert.alert('Success', `${names.length} team${names.length === 1 ? '' : 's'} added successfully!`);
@@ -84,6 +86,7 @@ export default function AddTeamScreen({ navigation }) {
         description: description.trim(),
         logo,
         preferredTimeSlots,
+        whatsappNumber: whatsappNumber.trim(),
       });
 
       navigation.goBack();
@@ -161,6 +164,19 @@ export default function AddTeamScreen({ navigation }) {
                 value={players}
                 onChangeText={setPlayers}
                 keyboardType="number-pad"
+                editable={!loading}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>WhatsApp Number</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="10-digit WhatsApp number"
+                placeholderTextColor="#999"
+                value={whatsappNumber}
+                onChangeText={setWhatsappNumber}
+                keyboardType="phone-pad"
                 editable={!loading}
               />
             </View>

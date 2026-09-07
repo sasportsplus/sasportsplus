@@ -25,6 +25,7 @@ export default function EditTeamScreen({ navigation, route }) {
   const [description, setDescription] = useState('');
   const [logo, setLogo] = useState('');
   const [preferredTimeSlots, setPreferredTimeSlots] = useState([]);
+  const [whatsappNumber, setWhatsappNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const [team, setTeam] = useState(null);
 
@@ -38,6 +39,7 @@ export default function EditTeamScreen({ navigation, route }) {
       setDescription(currentTeam.description || '');
       setLogo(currentTeam.logo || '');
       setPreferredTimeSlots(currentTeam.preferredTimeSlots || []);
+      setWhatsappNumber(currentTeam.whatsappNumber || '');
     }
   }, [teamId, getTeamById]);
 
@@ -73,6 +75,7 @@ export default function EditTeamScreen({ navigation, route }) {
         description: description.trim(),
         logo,
         preferredTimeSlots,
+        whatsappNumber: whatsappNumber.trim(),
       });
 
       navigation.goBack();
@@ -147,6 +150,19 @@ export default function EditTeamScreen({ navigation, route }) {
                 value={players}
                 onChangeText={setPlayers}
                 keyboardType="number-pad"
+                editable={!loading}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>WhatsApp Number</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="10-digit WhatsApp number"
+                placeholderTextColor="#999"
+                value={whatsappNumber}
+                onChangeText={setWhatsappNumber}
+                keyboardType="phone-pad"
                 editable={!loading}
               />
             </View>

@@ -171,6 +171,20 @@ export default function AdminDashboard({ navigation, onLogout }) {
             </View>
             <Text style={styles.actionButtonArrow}>›</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => navigation.navigate('PaymentManagement', { screen: 'Payments' })}
+          >
+            <View style={styles.actionButtonIcon}>
+              <Text style={styles.actionButtonIconText}>₹</Text>
+            </View>
+            <View style={styles.actionButtonContent}>
+              <Text style={styles.actionButtonTitle}>Payments</Text>
+              <Text style={styles.actionButtonDescription}>Manage fees, invoices and reminders</Text>
+            </View>
+            <Text style={styles.actionButtonArrow}>›</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Info Section */}

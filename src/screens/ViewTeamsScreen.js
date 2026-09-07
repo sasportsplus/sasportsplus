@@ -114,6 +114,7 @@ export default function ViewTeamsScreen({ navigation }) {
           <Text style={styles.teamName}>{item.name}</Text>
           <Text style={styles.teamDetail}>Captain: {item.captain || item.coach || 'N/A'}</Text>
           <Text style={styles.teamDetail}>Players: {item.players}</Text>
+          <Text style={styles.teamDetail}>WhatsApp: {item.whatsappNumber || 'Not added'}</Text>
           <Text style={styles.teamDetail}>
             Preferred times: {item.preferredTimeSlots?.length
               ? item.preferredTimeSlots.map(formatTimeLabel).join(', ')

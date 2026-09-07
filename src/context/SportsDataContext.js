@@ -69,7 +69,7 @@ const ensureSampleTeams = (existingTeams) => {
 };
 
 const createSampleMatches = (availableTeams) => {
-  const venues = ['Main Sports Ground', 'School Stadium', 'Central Field', 'North Campus Arena'];
+  const venues = ['Heritage Cricket Ground', 'School Stadium', 'Central Field', 'North Campus Arena'];
   const times = ['09:00 AM', '11:00 AM', '02:00 PM', '04:00 PM'];
 
   return availableTeams.slice(0, 8).map((team, index, teamsToSchedule) => {
@@ -237,6 +237,14 @@ export const SportsDataProvider = ({ children }) => {
     matchesRef.current = updatedMatches;
     setMatches(updatedMatches);
     await saveMatchesToStorage(updatedMatches);
+
+    const updatedTournaments = tournamentsRef.current.map((tournament) => ({
+      ...tournament,
+      teamIds: tournament.teamIds.filter((id) => id !== teamId),
+    }));
+    tournamentsRef.current = updatedTournaments;
+    setTournaments(updatedTournaments);
+    await saveTournamentsToStorage(updatedTournaments);
   };
 
   const deleteAllTeams = async () => {
@@ -309,14 +317,6 @@ export const SportsDataProvider = ({ children }) => {
     matchesRef.current = updatedMatches;
     setMatches(updatedMatches);
     await saveMatchesToStorage(updatedMatches);
-
-    const updatedTournaments = tournamentsRef.current.map((tournament) => ({
-      ...tournament,
-      teamIds: tournament.teamIds.filter((id) => id !== teamId),
-    }));
-    tournamentsRef.current = updatedTournaments;
-    setTournaments(updatedTournaments);
-    await saveTournamentsToStorage(updatedTournaments);
 
     return createdMatches;
   };
